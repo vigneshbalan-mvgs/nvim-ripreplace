@@ -1,17 +1,23 @@
 local M = {}
 
--- Example function: just writes a message
 function M.hello()
   print("Ripreplace says hello 👋")
 end
 
--- Example function: write to current buffer
-function M.write_line(text)
-  local row = vim.api.nvim_win_get_cursor(0)[1] - 1 -- current line (0-based)
-  vim.api.nvim_buf_set_lines(0, row, row, false, { text })
+-- Telescope-powered ripgrep search
+function M.search(prompt)
+  local has_telescope, telescope = pcall(require, "telescope.builtin")
+  if not has_telescope then
+    vim.notify("Telescope not found", vim.log.levels.ERROR)
+    return
+  end
+
+  telescope.grep_string({
+    search = prompt or vim.fn.input("Ripgrep > "),
+  })
 end
 
--- Your ripgrep replace logic could also go here:
+-- Example: replace logic (still rough)
 function M.replace(search, replace)
   local cmd = { "rg", "--vimgrep", search }
   local result = vim.fn.systemlist(cmd)
@@ -32,6 +38,13 @@ function M.replace(search, replace)
       end)
     end
   end
+end
+
+function M.setup()
+  -- Define a user command :RgSearch
+  vim.api.nvim_create_user_command("RgSearch", function()
+    require("ripreplace").search()
+  end, {})
 end
 
 return M
