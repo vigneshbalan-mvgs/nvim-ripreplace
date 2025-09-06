@@ -1,203 +1,47 @@
 local M = { config = { ui = "float", rg_flags = "", border = "rounded", keymaps = {}, backend = "rg" } }
-M.last = { search = nil, replace = nil, results = {}, current_result_index = 0, search_history = {}, replace_history = {} }
+local ui = require("ripreplace.ui")
+
 local active_win = nil
 local active_buf = nil
 
-local open_float
-local build_lines
-
-local open_ui
-
-function open_ui(lines, is_visual_search)
-  if M.config.ui == "float" then
-    if not active_win or not vim.api.nvim_win_is_valid(active_win) then
-      local buf = vim.api.nvim_create_buf(false, true)
-      local width = math.floor(vim.o.columns * 0.8)
-      local height = math.floor(vim.o.lines * 0.7)
-      local row = math.floor((vim.o.lines - height) / 2)
-      local col = math.floor((vim.o.columns - width) / 2)
-
-      local win = vim.api.nvim_open_win(buf, true, {
-        relative = "editor",
-        row = row,
-        col = col,
-        width = width,
-        height = height,
-        style = "minimal",
-        border = M.config.border,
-      })
-
-      active_buf = buf
-      active_win = win
-
-      -- Keymaps inside popup
-      vim.keymap.set("n", M.config.keymaps.quit, function()
-        vim.api.nvim_win_close(active_win, true)
-        active_win = nil
-        active_buf = nil
-      end, { buffer = buf })
-
-      if is_visual_search then
-        vim.keymap.set("n", M.config.keymaps.replace, function()
-          M.last.replace = vim.fn.input("Replace '" .. M.last.search .. "' with > ")
-          if M.last.replace ~= "" then
-            vim.api.nvim_win_close(active_win, true)
-            active_win = nil
-            active_buf = nil
-            M.show_preview(true, false)
-          end
-        end, { buffer = buf })
-      else
-        vim.keymap.set("n", M.config.keymaps.edit, function()
-          vim.api.nvim_win_close(active_win, true)
-          active_win = nil
-          active_buf = nil
-          M.open_input_modal(M.last.search, M.last.replace)
-        end, { buffer = buf })
-      end
-
-      vim.keymap.set("n", M.config.keymaps.apply_all, function()
-        M.apply_replace(false)
-        vim.api.nvim_win_close(active_win, true)
-        active_win = nil
-        active_buf = nil
-      end, { buffer = buf })
-
-      vim.keymap.set("n", M.config.keymaps.one_by_one, function()
-        M.last.current_result_index = 1
-        M.apply_replace(true)
-      end, { buffer = buf })
-
-      vim.keymap.set("n", M.config.keymaps.inline_edit, function()
-        vim.api.nvim_buf_set_option(active_buf, "modifiable", true)
-        vim.api.nvim_command("startinsert")
-      end, { buffer = buf })
-
-      vim.keymap.set("n", M.config.keymaps.save_inline_edit, function()
-        vim.api.nvim_buf_set_option(active_buf, "modifiable", false)
-        local lines = vim.api.nvim_buf_get_lines(active_buf, 0, -1, false)
-        M.apply_inline_edit(lines)
-      end, { buffer = buf })
-
-      vim.keymap.set("n", M.config.keymaps.populate_quickfix, function()
-        M.populate_quickfix()
-      end, { buffer = buf })
-    else -- split
-      vim.cmd("botright split")
-      local buf = vim.api.nvim_create_buf(false, true)
-      vim.api.nvim_win_set_buf(0, buf)
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-      active_buf = buf
-
-      -- Keymaps inside split
-      vim.keymap.set("n", M.config.keymaps.quit, function()
-        vim.api.nvim_win_close(0, true)
-        active_buf = nil
-      end, { buffer = buf })
-
-      if is_visual_search then
-        vim.keymap.set("n", M.config.keymaps.replace, function()
-          M.last.replace = vim.fn.input("Replace '" .. M.last.search .. "' with > ")
-          if M.last.replace ~= "" then
-            vim.api.nvim_win_close(0, true)
-            active_buf = nil
-            M.show_preview(true, false)
-          end
-        end, { buffer = buf })
-      else
-        vim.keymap.set("n", M.config.keymaps.edit, function()
-          vim.api.nvim_win_close(0, true)
-          active_buf = nil
-          M.open_input_modal(M.last.search, M.last.replace)
-        end, { buffer = buf })
-      end
-
-      vim.keymap.set("n", M.config.keymaps.apply_all, function()
-        M.apply_replace(false)
-        vim.api.nvim_win_close(0, true)
-        active_buf = nil
-      end, { buffer = buf })
-
-      vim.keymap.set("n", M.config.keymaps.one_by_one, function()
-        M.last.current_result_index = 1
-        M.apply_replace(true)
-      end, { buffer = buf })
-
-      vim.keymap.set("n", M.config.keymaps.inline_edit, function()
-        vim.api.nvim_buf_set_option(active_buf, "modifiable", true)
-        vim.api.nvim_command("startinsert")
-      end, { buffer = buf })
-
-      vim.keymap.set("n", M.config.keymaps.save_inline_edit, function()
-        vim.api.nvim_buf_set_option(active_buf, "modifiable", false)
-        local lines = vim.api.nvim_buf_get_lines(active_buf, 0, -1, false)
-        M.apply_inline_edit(lines)
-      end, { buffer = buf })
-
-      vim.keymap.set("n", M.config.keymaps.populate_quickfix, function()
-        M.populate_quickfix()
-      end, { buffer = buf })
+function M.get_search_command(search_text, files, directory)
+  local cmd
+  if M.config.backend == "rg" then
+    cmd = { "rg", "--vimgrep", "--no-heading" }
+    for flag in string.gmatch(M.config.rg_flags, "[^%s]+") do
+      table.insert(cmd, flag)
     end
-
-    vim.api.nvim_buf_set_lines(active_buf, 0, -1, false, lines)
-  else -- split
-    vim.cmd("botright split")
-    local buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_win_set_buf(0, buf)
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-    active_buf = buf
-
-    -- Keymaps inside split
-    vim.keymap.set("n", M.config.keymaps.quit, function()
-      vim.api.nvim_win_close(0, true)
-      active_buf = nil
-    end, { buffer = buf })
-
-    if is_visual_search then
-      vim.keymap.set("n", M.config.keymaps.replace, function()
-        M.last.replace = vim.fn.input("Replace '" .. M.last.search .. "' with > ")
-        if M.last.replace ~= "" then
-          vim.api.nvim_win_close(0, true)
-          active_buf = nil
-          M.show_preview(true, false)
-        end
-      end, { buffer = buf })
-    else
-      vim.keymap.set("n", M.config.keymaps.edit, function()
-        vim.api.nvim_win_close(0, true)
-        active_buf = nil
-        M.open_input_modal(M.last.search, M.last.replace)
-      end, { buffer = buf })
+    table.insert(cmd, search_text)
+    if directory then
+      table.insert(cmd, directory)
     end
-
-    vim.keymap.set("n", M.config.keymaps.apply_all, function()
-      M.apply_replace(false)
-      vim.api.nvim_win_close(0, true)
-      active_buf = nil
-    end, { buffer = buf })
-
-    vim.keymap.set("n", M.config.keymaps.one_by_one, function()
-      M.last.current_result_index = 1
-      M.apply_replace(true)
-    end, { buffer = buf })
-
-    vim.keymap.set("n", M.config.keymaps.inline_edit, function()
-      vim.api.nvim_buf_set_option(active_buf, "modifiable", true)
-      vim.api.nvim_command("startinsert")
-    end, { buffer = buf })
-
-    vim.keymap.set("n", M.config.keymaps.save_inline_edit, function()
-      vim.api.nvim_buf_set_option(active_buf, "modifiable", false)
-      local lines = vim.api.nvim_buf_get_lines(active_buf, 0, -1, false)
-      M.apply_inline_edit(lines)
-    end, { buffer = buf })
-
-    vim.keymap.set("n", M.config.keymaps.populate_quickfix, function()
-      M.populate_quickfix()
-    end, { buffer = buf })
+    if files then
+      table.insert(cmd, "--files-with-matches")
+      for _, file in ipairs(files) do
+        table.insert(cmd, file)
+      end
+    end
+  elseif M.config.backend == "git_grep" then
+    cmd = { "git", "grep", "-n", "-P" } -- -n for line numbers, -P for perl-regexp
+    if directory then
+      table.insert(cmd, "--untracked") -- Include untracked files
+      table.insert(cmd, "--recurse-submodules") -- Recurse into submodules
+      table.insert(cmd, directory)
+    end
+    if files then
+      for _, file in ipairs(files) do
+        table.insert(cmd, file)
+      end
+    end
+    table.insert(cmd, "--") -- Separator for files
+    table.insert(cmd, search_text)
   end
+  return cmd
 end
-end
+
+M.last = { search = nil, replace = nil, results = {}, current_result_index = 0, search_history = {}, replace_history = {} }
+
+local build_lines
 
 function build_lines(with_replace, is_visual_search)
   local header
@@ -225,73 +69,82 @@ end
 
 function M.show_preview(with_replace, is_visual_search)
   if #M.last.results == 0 then
-    if active_win and vim.api.nvim_win_is_valid(active_win) then
-      vim.api.nvim_win_close(active_win, true)
-      active_win = nil
-      active_buf = nil
-    end
+    ui.close_ui()
     return
   end
   local lines = build_lines(with_replace, is_visual_search)
-  open_ui(lines, is_visual_search)
+  M.open_input_modal(M.last.search, M.last.replace, lines)
 end
 
-function M.open_input_modal(search_text, replace_text)
+
+function M.open_input_modal(search_text, replace_text, results_lines)
   search_text = search_text or M.last.search or ""
   replace_text = replace_text or M.last.replace or ""
   local search_history_index = #M.last.search_history + 1
   local replace_history_index = #M.last.replace_history + 1
 
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+  local input_lines = {
     "Search:  " .. search_text,
     "Replace: " .. replace_text,
     "",
     "-- Press <CR> to search, <Esc> to cancel",
     "-- Use <Up>/<Down> for search history",
     "-- Use <C-Up>/<C-Down> for replace history",
-  })
+  }
+
+  local content_lines = input_lines
+  if results_lines and #results_lines > 0 then
+    content_lines = vim.list_extend(content_lines, { "" }) -- Add a separator
+    content_lines = vim.list_extend(content_lines, results_lines)
+  end
 
   local width = math.floor(vim.o.columns * 0.8)
-  local height = 6
+  local height = math.floor(vim.o.lines * 0.7) -- Make it larger for results
   local row = math.floor((vim.o.lines - height) / 2)
   local col = math.floor((vim.o.columns - width) / 2)
 
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    row = row,
-    col = col,
-    width = width,
-    height = height,
-    style = "minimal",
-    border = M.config.border,
-  })
+  if not M.active_win or not vim.api.nvim_win_is_valid(M.active_win) then
+    M.active_buf = vim.api.nvim_create_buf(false, true)
+    M.active_win = vim.api.nvim_open_win(M.active_buf, true, {
+      relative = "editor",
+      row = row,
+      col = col,
+      width = width,
+      height = height,
+      style = "minimal",
+      border = M.config.border,
+    })
+  end
+
+  vim.api.nvim_buf_set_lines(M.active_buf, 0, -1, false, content_lines)
 
   local function close_and_cleanup()
-    if vim.api.nvim_win_is_valid(win) then
-      vim.api.nvim_win_close(win, true)
+    if M.active_win and vim.api.nvim_win_is_valid(M.active_win) then
+      vim.api.nvim_win_close(M.active_win, true)
     end
+    M.active_win = nil
+    M.active_buf = nil
     vim.cmd("stopinsert")
-    pcall(vim.keymap.del, "i", "<Esc>", { buffer = buf })
-    pcall(vim.keymap.del, "i", "<CR>", { buffer = buf })
-    pcall(vim.keymap.del, "i", "<C-c>", { buffer = buf })
-    pcall(vim.keymap.del, "i", "<Up>", { buffer = buf })
-    pcall(vim.keymap.del, "i", "<Down>", { buffer = buf })
-    pcall(vim.keymap.del, "i", "<C-Up>", { buffer = buf })
-    pcall(vim.keymap.del, "i", "<C-Down>", { buffer = buf })
+    pcall(vim.keymap.del, "i", "<Esc>", { buffer = M.active_buf })
+    pcall(vim.keymap.del, "i", "<CR>", { buffer = M.active_buf })
+    pcall(vim.keymap.del, "i", "<C-c>", { buffer = M.active_buf })
+    pcall(vim.keymap.del, "i", "<Up>", { buffer = M.active_buf })
+    pcall(vim.keymap.del, "i", "<Down>", { buffer = M.active_buf })
+    pcall(vim.keymap.del, "i", "<C-Up>", { buffer = M.active_buf })
+    pcall(vim.keymap.del, "i", "<C-Down>", { buffer = M.active_buf })
   end
 
   if search_text ~= "" then
-    vim.api.nvim_win_set_cursor(win, { 2, 10 + #replace_text }) -- Move to replace line
+    vim.api.nvim_win_set_cursor(M.active_win, { 2, 10 + #replace_text }) -- Move to replace line
   else
-    vim.api.nvim_win_set_cursor(win, { 1, 10 + #search_text })
+    vim.api.nvim_win_set_cursor(M.active_win, { 1, 10 + #search_text })
   end
   vim.cmd("startinsert")
 
-  vim.keymap.set("i", M.config.keymaps.cancel, close_and_cleanup, { buffer = buf })
+  vim.keymap.set("i", M.config.keymaps.cancel, close_and_cleanup, { buffer = M.active_buf })
 
   vim.keymap.set("i", "<CR>", function()
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, 2, false)
+    local lines = vim.api.nvim_buf_get_lines(M.active_buf, 0, 2, false)
     local search = vim.fn.trim(string.sub(lines[1], 10))
     local replace = vim.fn.trim(string.sub(lines[2], 10))
     if search ~= "" then
@@ -302,10 +155,10 @@ function M.open_input_modal(search_text, replace_text)
     end
     close_and_cleanup()
     M.show_preview(replace ~= "", false)
-  end, { buffer = buf })
+  end, { buffer = M.active_buf })
 
   vim.keymap.set("i", "d", function()
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, 2, false)
+    local lines = vim.api.nvim_buf_get_lines(M.active_buf, 0, 2, false)
     local search = vim.fn.trim(string.sub(lines[1], 10))
     local replace = vim.fn.trim(string.sub(lines[2], 10))
     close_and_cleanup()
@@ -313,10 +166,10 @@ function M.open_input_modal(search_text, replace_text)
     if directory ~= "" then
       M.search_in_directory(search, replace, directory)
     end
-  end, { buffer = buf })
+  end, { buffer = M.active_buf })
 
   vim.keymap.set("i", "f", function()
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, 2, false)
+    local lines = vim.api.nvim_buf_get_lines(M.active_buf, 0, 2, false)
     local search = vim.fn.trim(string.sub(lines[1], 10))
     local replace = vim.fn.trim(string.sub(lines[2], 10))
     close_and_cleanup()
@@ -325,46 +178,52 @@ function M.open_input_modal(search_text, replace_text)
       local files = vim.split(files_str, ",%s*")
       M.search_in_files(search, replace, files)
     end
-  end, { buffer = buf })
+  end, { buffer = M.active_buf })
 
   vim.keymap.set("i", M.config.keymaps.search_history_up, function()
     if search_history_index > 1 then
       search_history_index = search_history_index - 1
       local search = M.last.search_history[search_history_index]
-      vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "Search:  " .. search })
+      vim.api.nvim_buf_set_lines(M.active_buf, 0, 1, false, { "Search:  " .. search })
     end
-  end, { buffer = buf })
+  end, { buffer = M.active_buf })
 
   vim.keymap.set("i", M.config.keymaps.search_history_down, function()
     if search_history_index < #M.last.search_history then
       search_history_index = search_history_index + 1
       local search = M.last.search_history[search_history_index]
-      vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "Search:  " .. search })
+      vim.api.nvim_buf_set_lines(M.active_buf, 0, 1, false, { "Search:  " .. search })
     end
-  end, { buffer = buf })
+  end, { buffer = M.active_buf })
 
   vim.keymap.set("i", M.config.keymaps.replace_history_up, function()
     if replace_history_index > 1 then
       replace_history_index = replace_history_index - 1
       local replace = M.last.replace_history[replace_history_index]
-      vim.api.nvim_buf_set_lines(buf, 1, 2, false, { "Replace: " .. replace })
+      vim.api.nvim_buf_set_lines(M.active_buf, 1, 2, false, { "Replace: " .. replace })
     end
-  end, { buffer = buf })
+  end, { buffer = M.active_buf })
 
   vim.keymap.set("i", M.config.keymaps.replace_history_down, function()
     if replace_history_index < #M.last.replace_history then
       replace_history_index = replace_history_index + 1
       local replace = M.last.replace_history[replace_history_index]
-      vim.api.nvim_buf_set_lines(buf, 1, 2, false, { "Replace: " .. replace })
+      vim.api.nvim_buf_set_lines(M.active_buf, 1, 2, false, { "Replace: " .. replace })
     end
-  end, { buffer = buf })
+  end, { buffer = M.active_buf })
 
-  vim.api.nvim_buf_attach(buf, false, {
+  local timer_id = nil
+  vim.api.nvim_buf_attach(M.active_buf, false, {
     on_bytes = function(_, _, _, _, _, _, _, _, _, _, _, _)
-      local lines = vim.api.nvim_buf_get_lines(buf, 0, 2, false)
+      if timer_id then
+        vim.fn.timer_stop(timer_id)
+      end
+      local lines = vim.api.nvim_buf_get_lines(M.active_buf, 0, 2, false)
       local search = vim.fn.trim(string.sub(lines[1], 10))
       local replace = vim.fn.trim(string.sub(lines[2], 10))
-      M.live_search(search, replace)
+      live_search_timer_id = vim.defer_fn(function()
+        M.live_search(search, replace)
+      end, 150)
     end,
   })
 end
@@ -471,8 +330,8 @@ function M.populate_quickfix()
   end
   vim.fn.setqflist(qf_list)
   vim.api.nvim_win_close(active_win, true)
-  active_win = nil
-  active_buf = nil
+  active_win = win
+  active_buf = buf
   vim.cmd("copen")
   vim.notify("Quickfix list populated!")
 end
@@ -499,45 +358,11 @@ function M.apply_inline_edit(lines)
     end
   end
   vim.api.nvim_win_close(active_win, true)
-  active_win = nil
-  active_buf = nil
+  active_win = win
+  active_buf = buf
   vim.notify("Inline edits applied!")
 end
 
-local function get_search_command(search_text, files, directory)
-  local cmd
-  if M.config.backend == "rg" then
-    cmd = { "rg", "--vimgrep", "--no-heading" }
-    for flag in string.gmatch(M.config.rg_flags, "[^%s]+") do
-      table.insert(cmd, flag)
-    end
-    table.insert(cmd, search_text)
-    if directory then
-      table.insert(cmd, directory)
-    end
-    if files then
-      table.insert(cmd, "--files-with-matches")
-      for _, file in ipairs(files) do
-        table.insert(cmd, file)
-      end
-    end
-  elseif M.config.backend == "git_grep" then
-    cmd = { "git", "grep", "-n", "-P" } -- -n for line numbers, -P for perl-regexp
-    if directory then
-      table.insert(cmd, "--untracked") -- Include untracked files
-      table.insert(cmd, "--recurse-submodules") -- Recurse into submodules
-      table.insert(cmd, directory)
-    end
-    if files then
-      for _, file in ipairs(files) do
-        table.insert(cmd, file)
-      end
-    end
-    table.insert(cmd, "--") -- Separator for files
-    table.insert(cmd, search_text)
-  end
-  return cmd
-end
 
 function M.search_in_directory(search_text, replace_text, directory)
   M.last.search = search_text
@@ -580,10 +405,12 @@ function M.live_search(search_text, replace_text)
   M.last.search = search_text
   M.last.replace = replace_text
 
-  local cmd = get_search_command(search_text)
+  local cmd = M.get_search_command(search_text)
   M.last.results = vim.fn.systemlist(cmd)
 
-  M.show_preview(replace_text ~= "", false)
+  vim.schedule(function()
+    M.show_preview(replace_text ~= "", false)
+  end)
 end
 
 function M.setup(opts)
@@ -611,3 +438,5 @@ function M.setup(opts)
 end
 
 return M
+
+
