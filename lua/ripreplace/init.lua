@@ -1,8 +1,15 @@
 local M = {}
-M.last = { search = nil, replace = nil, results = {} }
+M.last = { search = nil, replace = nil, results = {}, current_result_index = 0 }
+local active_win = nil
+local active_buf = nil
 
--- Helper: open a floating window
+-- Helper: open or update a floating window
 local function open_float(lines)
+  if active_win and vim.api.nvim_win_is_valid(active_win) then
+    vim.api.nvim_buf_set_lines(active_buf, 0, -1, false, lines)
+    return
+  end
+
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 
@@ -21,20 +28,32 @@ local function open_float(lines)
     border = "rounded",
   })
 
+  active_buf = buf
+  active_win = win
+
   -- Keymaps inside popup
-  vim.keymap.set("n", "q", function() vim.api.nvim_win_close(win, true) end, { buffer = buf })
+  vim.keymap.set("n", "q", function()
+    vim.api.nvim_win_close(active_win, true)
+    active_win = nil
+    active_buf = nil
+  end, { buffer = buf })
+
   vim.keymap.set("n", "r", function()
     M.last.replace = vim.fn.input("Replace '" .. M.last.search .. "' with > ")
     if M.last.replace ~= "" then M.show_preview(true) end
   end, { buffer = buf })
+
   vim.keymap.set("n", "a", function()
-    M.apply_replace(false); vim.api.nvim_win_close(win, true)
-  end, { buffer = buf })
-  vim.keymap.set("n", "o", function()
-    M.apply_replace(true); vim.api.nvim_win_close(win, true)
+    M.apply_replace(false)
+    vim.api.nvim_win_close(active_win, true)
+    active_win = nil
+    active_buf = nil
   end, { buffer = buf })
 
-  return buf, win
+  vim.keymap.set("n", "o", function()
+    M.last.current_result_index = 1
+    M.apply_replace(true)
+  end, { buffer = buf })
 end
 
 -- Build preview lines
@@ -101,41 +120,51 @@ function M.apply_replace(one_by_one)
   if not M.last.replace or M.last.replace == "" then return end
   if not M.last.search or #M.last.results == 0 then return end
 
+  if one_by_one then
+    local result_count = #M.last.results
+    while M.last.current_result_index <= result_count do
+      local res = M.last.results[M.last.current_result_index]
+      local file, lnum, col, _ = res:match("([^:]+):(%d+):(%d+):(.*)")
+      if file then
+        vim.cmd("edit " .. file)
+        vim.api.nvim_win_set_cursor(0, { tonumber(lnum), tonumber(col) - 1 })
+
+        local choice = vim.fn.confirm("Replace '" .. M.last.search .. "' in this file?", "&Yes\n&No\n&All", 1)
+
+        if choice == 1 then
+          -- Replace and continue
+          local f = io.open(file, "r")
+          local content = f:read("*all")
+          f:close()
+          local replaced_content = content:gsub(M.last.search, M.last.replace, 1) -- Replace only the first occurrence
+          f = io.open(file, "w")
+          f:write(replaced_content)
+          f:close()
+          vim.notify("Replaced one occurrence in " .. file, vim.log.levels.INFO)
+        elseif choice == 2 then
+          -- Skip and continue
+          vim.notify("Skipped.", vim.log.levels.INFO)
+        elseif choice == 3 then
+          -- Replace all and exit
+          M.apply_replace(false)
+          return
+        end
+      end
+      M.last.current_result_index = M.last.current_result_index + 1
+    end
+    vim.notify("One-by-one replacements finished.", vim.log.levels.INFO)
+    return
+  end
+
+  -- Replace all logic
   for _, res in ipairs(M.last.results) do
-    local file, lnum, _, _ = res:match("([^:]+):(%d+):(%d+):(.*)")
+    local file, _, _, _ = res:match("([^:]+):(%d+):(%d+):(.*)")
     if file then
       local f = io.open(file, "r")
       if not f then goto continue end
       local content = f:read("*all")
       f:close()
-
       local replaced_content = content:gsub(M.last.search, M.last.replace)
-      if one_by_one then
-        -- show diff in temp buffer for confirmation
-        local diff_buf = vim.api.nvim_create_buf(false, true)
-        vim.api.nvim_buf_set_lines(diff_buf, 0, -1, false, {
-          "File: " .. file,
-          "Press y to replace, n to skip",
-          "",
-          "---- Original vs Replaced ----",
-          content,
-          "---- Replacement Preview ----",
-          replaced_content,
-        })
-        vim.api.nvim_open_win(diff_buf, true, {
-          relative = "editor",
-          row = 1,
-          col = 1,
-          width = math.floor(vim.o.columns * 0.9),
-          height = math.floor(vim.o.lines * 0.9),
-          style = "minimal",
-          border = "rounded",
-        })
-        local choice = vim.fn.confirm("Replace in " .. file .. "?", "&Yes\n&No", 2)
-        vim.api.nvim_buf_delete(diff_buf, { force = true })
-        if choice ~= 1 then goto continue end
-      end
-
       f = io.open(file, "w")
       if f then
         f:write(replaced_content)
