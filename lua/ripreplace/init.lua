@@ -1,11 +1,9 @@
 local M = {}
 
--- hello function
 function M.hello()
   print("Ripreplace says hello 👋")
 end
 
--- telescope-powered ripgrep search
 function M.search(prompt)
   local ok, telescope = pcall(require, "telescope.builtin")
   if not ok then
@@ -15,7 +13,7 @@ function M.search(prompt)
   telescope.grep_string({ search = prompt or vim.fn.input("Ripgrep > ") })
 end
 
--- setup function to register commands/keymaps
+-- setup function (this is what Lazy calls)
 function M.setup()
   vim.api.nvim_create_user_command("RgSearch", function()
     require("ripreplace").search()
