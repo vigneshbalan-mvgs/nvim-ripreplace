@@ -130,4 +130,40 @@ function M.apply_replace(one_by_one)
   vim.notify("replacement is ok!")
 end
 
+
+function M.single_file_replace()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local current_file = vim.api.nvim_buf_get_name(bufnr)
+
+  if current_file == "" then
+    vim.notify("Cannot perform single file replace on an unnamed buffer.", vim.log.levels.WARN)
+    return
+  end
+
+  local search_pattern = vim.fn.input("Search pattern (Lua regex): ")
+  if search_pattern == "" then
+    vim.notify("Search pattern cannot be empty. Aborting.", vim.log.levels.WARN)
+    return
+  end
+
+  local replace_string = vim.fn.input("Replace with: ")
+
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local new_lines = {}
+  local replacements_made = 0
+
+  for _, line in ipairs(lines) do
+    local new_line, count = line:gsub(search_pattern, replace_string)
+    table.insert(new_lines, new_line)
+    replacements_made = replacements_made + count
+  end
+
+  if replacements_made > 0 then
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, new_lines)
+    vim.notify(string.format("Replaced %d occurrences in %s", replacements_made, current_file), vim.log.levels.INFO)
+  else
+    vim.notify("No occurrences found for the given pattern.", vim.log.levels.INFO)
+  end
+end
+
 return M

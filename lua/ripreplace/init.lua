@@ -14,7 +14,9 @@ function M.setup(opts)
     M.config[k] = v
   end
 
-  vim.keymap.set({ "n", "v" }, "<leader>rr", search.project_search, { desc = "Project-wide search & replace preview" })
+  vim.keymap.set({ "n", "v" }, "<leader>rp", search.project_search, { desc = "Project-wide search & replace preview" })
+  vim.keymap.set({ "n", "v" }, "<leader>rr", require("ripreplace.replace").single_file_replace, { desc = "Single file search & replace" })
+  vim.cmd("command! RipreplaceSingle lua require('ripreplace.replace').single_file_replace()")
 end
 
 return M
