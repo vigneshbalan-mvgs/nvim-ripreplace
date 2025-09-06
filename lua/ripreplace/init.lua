@@ -3,8 +3,10 @@ M.last = { search = nil, replace = nil, results = {}, current_result_index = 0 }
 local active_win = nil
 local active_buf = nil
 
--- Helper: open or update a floating window
-local function open_float(lines)
+local open_float
+local build_lines
+
+function open_float(lines, is_visual_search)
   if active_win and vim.api.nvim_win_is_valid(active_win) then
     vim.api.nvim_buf_set_lines(active_buf, 0, -1, false, lines)
     return
@@ -38,10 +40,24 @@ local function open_float(lines)
     active_buf = nil
   end, { buffer = buf })
 
-  vim.keymap.set("n", "r", function()
-    M.last.replace = vim.fn.input("Replace '" .. M.last.search .. "' with > ")
-    if M.last.replace ~= "" then M.show_preview(true) end
-  end, { buffer = buf })
+  if is_visual_search then
+    vim.keymap.set("n", "r", function()
+      M.last.replace = vim.fn.input("Replace '" .. M.last.search .. "' with > ")
+      if M.last.replace ~= "" then
+        vim.api.nvim_win_close(active_win, true)
+        active_win = nil
+        active_buf = nil
+        M.show_preview(true, false)
+      end
+    end, { buffer = buf })
+  else
+    vim.keymap.set("n", "e", function()
+      vim.api.nvim_win_close(active_win, true)
+      active_win = nil
+      active_buf = nil
+      M.open_input_modal(M.last.search, M.last.replace)
+    end, { buffer = buf })
+  end
 
   vim.keymap.set("n", "a", function()
     M.apply_replace(false)
@@ -56,11 +72,15 @@ local function open_float(lines)
   end, { buffer = buf })
 end
 
--- Build preview lines
-function M.build_lines(with_replace)
-  local header = with_replace and
-      "Preview Replacements (r=edit, a=replace all, o=one-by-one, q=quit)" or
-      "Search Results (r=replace, a=replace all, o=one-by-one, q=quit)"
+function build_lines(with_replace, is_visual_search)
+  local header
+  if with_replace then
+    header = "Preview Replacements (e=edit, a=replace all, o=one-by-one, q=quit)"
+  elseif is_visual_search then
+    header = "Search Results (r=replace, a=replace all, o=one-by-one, q=quit)"
+  else
+    header = "Search Results (e=edit, a=replace all, o=one-by-one, q=quit)"
+  end
   local lines = { header, "" }
   for _, res in ipairs(M.last.results) do
     local file, lnum, _, text = res:match("([^:]+):(%d+):(%d+):(.*)")
@@ -76,46 +96,109 @@ function M.build_lines(with_replace)
   return lines
 end
 
--- Show floating preview
-function M.show_preview(with_replace)
-  local lines = M.build_lines(with_replace)
-  open_float(lines)
+function M.show_preview(with_replace, is_visual_search)
+  local lines = build_lines(with_replace, is_visual_search)
+  open_float(lines, is_visual_search)
 end
 
--- Project-wide search
+function M.open_input_modal(search_text, replace_text)
+  search_text = search_text or ""
+  replace_text = replace_text or ""
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+    "Search:  " .. search_text,
+    "Replace: " .. replace_text,
+    "",
+    "-- Press <CR> to search, <Esc> to cancel",
+  })
+
+  local width = math.floor(vim.o.columns * 0.8)
+  local height = 4
+  local row = math.floor((vim.o.lines - height) / 2)
+  local col = math.floor((vim.o.columns - width) / 2)
+
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    row = row,
+    col = col,
+    width = width,
+    height = height,
+    style = "minimal",
+    border = "rounded",
+  })
+
+  local function close_and_cleanup()
+    if vim.api.nvim_win_is_valid(win) then
+        vim.api.nvim_win_close(win, true)
+    end
+    vim.cmd("stopinsert")
+    pcall(vim.keymap.del, "i", "<Esc>", { buffer = buf })
+    pcall(vim.keymap.del, "i", "<CR>", { buffer = buf })
+  end
+
+  if search_text ~= "" then
+    vim.api.nvim_win_set_cursor(win, {2, 10 + #replace_text}) -- Move to replace line
+  else
+    vim.api.nvim_win_set_cursor(win, {1, 10 + #search_text})
+  end
+  vim.cmd("startinsert")
+
+  vim.keymap.set("i", "<Esc>", close_and_cleanup, { buffer = buf })
+
+  vim.keymap.set("i", "<CR>", function()
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, 2, false)
+    local search = vim.fn.trim(string.sub(lines[1], 10))
+    local replace = vim.fn.trim(string.sub(lines[2], 10))
+
+    close_and_cleanup()
+
+    if search == "" then return end
+
+    M.last.search = search
+    M.last.replace = replace
+
+    local cmd = { "rg", "--vimgrep", "--no-heading", search }
+    M.last.results = vim.fn.systemlist(cmd)
+    if #M.last.results == 0 then
+      vim.notify("No matches found", vim.log.levels.INFO)
+      return
+    end
+
+    M.show_preview(replace ~= "", false)
+  end, { buffer = buf })
+end
+
 function M.project_search()
   local mode = vim.fn.mode()
-  local search = ""
 
   if mode:match("[vV]") then
-    -- Visual selection
+    -- Visual selection: use the old workflow
     local _, ls, cs = unpack(vim.fn.getpos("'<"))
     local _, le, ce = unpack(vim.fn.getpos("'>"))
     local lines = vim.fn.getline(ls, le)
     if #lines == 0 then return end
     lines[#lines] = string.sub(lines[#lines], 1, ce)
     lines[1] = string.sub(lines[1], cs)
-    search = table.concat(lines, "\n")
+    local search = table.concat(lines, "\n")
+
+    if search == "" then return end
+    M.last.search = search
+    M.last.replace = nil
+
+    local cmd = { "rg", "--vimgrep", "--no-heading", search }
+    M.last.results = vim.fn.systemlist(cmd)
+    if #M.last.results == 0 then
+      vim.notify("No matches found", vim.log.levels.INFO)
+      return
+    end
+
+    M.show_preview(false, true)
   else
-    -- Normal mode: ask input
-    search = vim.fn.input("Search for > ")
+    -- Normal mode: use the new modal
+    M.open_input_modal()
   end
-
-  if search == "" then return end
-  M.last.search = search
-  M.last.replace = nil
-
-  local cmd = { "rg", "--vimgrep", "--no-heading", search }
-  M.last.results = vim.fn.systemlist(cmd)
-  if #M.last.results == 0 then
-    vim.notify("No matches found", vim.log.levels.INFO)
-    return
-  end
-
-  M.show_preview(false)
 end
 
--- Apply replacement: interactive (one-by-one) or all at once
 function M.apply_replace(one_by_one)
   if not M.last.replace or M.last.replace == "" then return end
   if not M.last.search or #M.last.results == 0 then return end
@@ -177,7 +260,6 @@ function M.apply_replace(one_by_one)
   vim.notify("Replacements done!")
 end
 
--- Setup keymaps
 function M.setup()
   vim.keymap.set({ "n", "v" }, "<leader>rr", M.project_search, { desc = "Project-wide search & replace preview" })
 end
