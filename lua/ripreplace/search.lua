@@ -1,7 +1,11 @@
+local M = {}
 local state = require("ripreplace.state")
 local ui = require("ripreplace.ui")
-local config = require("ripreplace").config -- Access the global config
-local M = {}
+local config -- Will be set by init.lua
+
+function M.set_config(cfg)
+  config = cfg
+end
 
 -- Project-wide search
 function M.project_search()
@@ -23,10 +27,15 @@ function M.project_search()
   end
 
   if search == "" then return end
+  if search:find("\n") then
+    vim.notify("Multi-line search is not supported. Please select a single line or enter a single-line query.", vim.log.levels.WARN)
+    return
+  end
   state.last.search = search
   state.last.replace = nil
 
-  local cmd = { "rg", "--vimgrep", "--no-heading", search }
+  -- Use literal matching to align with our replacement logic (plain text)
+  local cmd = { "rg", "--vimgrep", "--no-heading", "-F", search }
   state.last.results = vim.fn.systemlist(cmd)
   if #state.last.results == 0 then
     vim.notify("No matches found", vim.log.levels.INFO)
@@ -34,8 +43,13 @@ function M.project_search()
   end
 
   if config.use_telescope then
-    local telescope_integration = require("ripreplace.integrations.telescope")
-    telescope_integration.setup_picker(state.last.results)
+    local ok, telescope_integration = pcall(require, "ripreplace.integrations.telescope")
+    if ok then
+      telescope_integration.setup_picker(state.last.results)
+    else
+      vim.notify("Telescope integration not available. Falling back to built-in preview.", vim.log.levels.WARN)
+      ui.show_preview(false)
+    end
   else
     ui.show_preview(false)
   end

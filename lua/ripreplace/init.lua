@@ -1,9 +1,11 @@
 local M = {}
-local search = require("ripreplace.search")
 
 M.config = {
   use_telescope = false, -- Default to false
 }
+
+local search = require("ripreplace.search")
+search.set_config(M.config)
 
 -- Setup keymaps and configuration
 function M.setup(opts)

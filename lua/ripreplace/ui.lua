@@ -1,6 +1,11 @@
 local state = require("ripreplace.state")
 local M = {}
 
+-- Escape Lua pattern magic characters for plain-text gsub
+local function escape_lua_pattern(s)
+  return (s:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1"))
+end
+
 -- Helper: open or update a floating window
 local function open_float(lines)
   if state.active_win and vim.api.nvim_win_is_valid(state.active_win) then
@@ -31,7 +36,9 @@ local function open_float(lines)
 
   -- Keymaps inside popup
   vim.keymap.set("n", "q", function()
-    vim.api.nvim_win_close(state.active_win, true)
+    if state.active_win and vim.api.nvim_win_is_valid(state.active_win) then
+      vim.api.nvim_win_close(state.active_win, true)
+    end
     state.active_win = nil
     state.active_buf = nil
   end, { buffer = buf })
@@ -43,7 +50,9 @@ local function open_float(lines)
 
   vim.keymap.set("n", "a", function()
     require("ripreplace.replace").apply_replace(false)
-    vim.api.nvim_win_close(state.active_win, true)
+    if state.active_win and vim.api.nvim_win_is_valid(state.active_win) then
+      vim.api.nvim_win_close(state.active_win, true)
+    end
     state.active_win = nil
     state.active_buf = nil
   end, { buffer = buf })
@@ -64,7 +73,7 @@ function M.build_lines(with_replace)
     local file, lnum, _, text = res:match("([^:]+):(%d+):(%d+):(.*)")
     if file and text then
       if with_replace and state.last.replace then
-        local replaced = text:gsub(state.last.search, state.last.replace)
+        local replaced = text:gsub(escape_lua_pattern(state.last.search), state.last.replace)
         table.insert(lines, string.format("%s:%s | %s → %s", file, lnum, text, replaced))
       else
         table.insert(lines, string.format("%s:%s | %s", file, lnum, text))
