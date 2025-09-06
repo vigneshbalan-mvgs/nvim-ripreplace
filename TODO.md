@@ -44,3 +44,8 @@
 - [x] Fixed `E565: Not allowed to change text or change window` error by scheduling UI updates.
 - [x] Implemented debouncing for live search in the input modal to improve typing experience.
 - [x] Fixed `E5101: Cannot convert given Lua type` error in debouncing by correctly managing timer ID scope.
+
+## Documentation and Project Management
+
+- [ ] `pendingtodo.md`: A dynamic list of pending tasks and identified issues.
+- [ ] `rules.md`: Documentation outlining the project's expected behavior and design principles.

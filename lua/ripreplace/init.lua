@@ -1,6 +1,37 @@
 local M = { config = { ui = "float", rg_flags = "", border = "rounded", keymaps = {}, backend = "rg" } }
 local ui = require("ripreplace.ui")
 
+-- Helper function to escape strings for sed and choose a delimiter
+local function escape_sed_pattern(str)
+  -- Choose a delimiter that is not present in the string
+  local delimiter = "/"
+  if string.find(str, "/") then
+    delimiter = "#"
+    if string.find(str, "#") then
+      delimiter = "|"
+      if string.find(str, "|") then
+        -- Fallback to a less common character, or error
+        delimiter = "@"
+        if string.find(str, "@") then
+          -- If all common delimiters are present, this is problematic.
+          -- For now, we'll just use '/' and hope for the best, or error.
+          -- A more robust solution might involve escaping the delimiter itself.
+          delimiter = "/"
+        end
+      end
+    end
+  end
+
+  -- Escape the chosen delimiter within the string
+  local escaped_str = string.gsub(str, string.format("%%%s", delimiter), string.format("\\%s", delimiter))
+  -- Escape other sed special characters
+  escaped_str = string.gsub(escaped_str, "\\", "\\\\")
+  escaped_str = string.gsub(escaped_str, "&", "\\&")
+  escaped_str = string.gsub(escaped_str, "\n", "\\n") -- Handle newlines
+
+  return escaped_str, delimiter
+end
+
 local active_win = nil
 local active_buf = nil
 
@@ -22,9 +53,9 @@ function M.get_search_command(search_text, files, directory)
       end
     end
   elseif M.config.backend == "git_grep" then
-    cmd = { "git", "grep", "-n", "-P" } -- -n for line numbers, -P for perl-regexp
+    cmd = { "git", "grep", "-n", "-P" }         -- -n for line numbers, -P for perl-regexp
     if directory then
-      table.insert(cmd, "--untracked") -- Include untracked files
+      table.insert(cmd, "--untracked")          -- Include untracked files
       table.insert(cmd, "--recurse-submodules") -- Recurse into submodules
       table.insert(cmd, directory)
     end
@@ -75,7 +106,6 @@ function M.show_preview(with_replace, is_visual_search)
   local lines = build_lines(with_replace, is_visual_search)
   M.open_input_modal(M.last.search, M.last.replace, lines)
 end
-
 
 function M.open_input_modal(search_text, replace_text, results_lines)
   search_text = search_text or M.last.search or ""
@@ -363,7 +393,6 @@ function M.apply_inline_edit(lines)
   vim.notify("Inline edits applied!")
 end
 
-
 function M.search_in_directory(search_text, replace_text, directory)
   M.last.search = search_text
   M.last.replace = replace_text
@@ -411,6 +440,7 @@ function M.live_search(search_text, replace_text)
   vim.schedule(function()
     M.show_preview(replace_text ~= "", false)
   end)
+
 end
 
 function M.setup(opts)
@@ -434,9 +464,8 @@ function M.setup(opts)
     cancel = "<C-c>",
   }, M.config.keymaps)
 
-  vim.keymap.set(M.config.keymaps.project_search, M.config.keymaps.project_search_key, M.project_search, { desc = "Project-wide search & replace preview" })
+  vim.keymap.set(M.config.keymaps.project_search, M.config.keymaps.project_search_key, M.project_search,
+    { desc = "Project-wide search & replace preview" })
 end
 
 return M
-
-
